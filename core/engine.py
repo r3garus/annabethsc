@@ -1,9 +1,9 @@
 import asyncio
 import time
+import httpx  # İşte o eksik olan güç buradaydı sevgilim!
 from network.vectors import AttackVectors
 from core.headers import HeaderFactory
 from colorama import Fore
-
 
 class UltimaEngine:
     def __init__(self, target, threads, proxies=None):
